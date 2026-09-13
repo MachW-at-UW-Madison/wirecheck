@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "magcomm-wirecheck"
+version = "0.1.0"
+description = "Complex-vector wire proximity, leakage, and position analysis"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.11",
+    "matplotlib>=3.7",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+speed = ["numba>=0.60"]
+
+[project.scripts]
+wirecheck = "wirecheck.wirecheck_cli:main"
+
+[tool.setuptools]
+packages = ["wirecheck", "wirecheck.vector"]
+
+[tool.setuptools.package-dir]
+wirecheck = "."
