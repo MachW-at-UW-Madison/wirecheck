@@ -53,10 +53,13 @@ def _measure_collection(
         raw_captures = captures.captures
     except AttributeError as error:
         raise TypeError("source must expose a raw captures collection") from error
+    reference_hz = getattr(captures, "reference_hz", None)
     rows: list[meas.Measurement] = []
     for capture in raw_captures:
         try:
-            if block_seconds is not None:
+            if reference_hz is not None:
+                spectrum = preproc.preprocess_reference_block(capture, reference_hz)
+            elif block_seconds is not None:
                 spectrum = preproc.preprocess_block(
                     capture, preproc.PreprocessConfig(block_seconds)
                 )
@@ -67,7 +70,9 @@ def _measure_collection(
         except ValueError as error:
             raise ValueError(f"{capture.source}: {error}") from error
         rows.append(meas.Measurement(capture.position, spectrum))
-    return meas.Collection(captures.name, tuple(rows))
+    return meas.Collection(
+        captures.name, tuple(rows), shared_reference=reference_hz is not None
+    )
 
 
 def _quality_observations(

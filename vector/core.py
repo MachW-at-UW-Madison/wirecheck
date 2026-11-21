@@ -177,6 +177,7 @@ class VectorData:
     plane_basis: FloatArray
     plane_eigenvalues: FloatArray
     config: FitConfig
+    shared_reference: bool = False
 
     def __post_init__(self) -> None:
         horizontal: NDArray[np.float64] = _readonly(self.horizontal_m, dtype=float)
@@ -241,6 +242,7 @@ class VectorFit:
     success: bool
     message: str
     n_pinned: int = 0
+    shared_reference: bool = False
 
     def __post_init__(self) -> None:
         if self.handedness not in (-1, 1):
@@ -259,7 +261,8 @@ class VectorFit:
 
     @property
     def n_free(self) -> int:
-        return N_PARAMETERS - self.n_pinned + self.capture_gauges.size
+        gauges = 1 if self.shared_reference else self.capture_gauges.size
+        return N_PARAMETERS - self.n_pinned + gauges
 
     @property
     def n_observations(self) -> int:
@@ -374,6 +377,7 @@ def make_vector_data(
         plane_basis=eigenvectors[:, order[:2]],
         plane_eigenvalues=eigenvalues[order],
         config=settings,
+        shared_reference=collection.shared_reference,
     )
 
 
@@ -386,6 +390,7 @@ def _compiled_pair(data: VectorData, handedness: int) -> CompiledPair | None:
         sigma_nt=data.sigma_nt,
         core_m=data.config.core_m,
         pair_spacing_m=data.config.pair_spacing_m,
+        shared_reference=data.shared_reference,
     )
 
 
@@ -446,9 +451,14 @@ def vector_predict(params: np.ndarray, data: VectorData, handedness: int) -> np.
 
 
 def _optimal_phase_gauges(
-    observed: np.ndarray, prediction: np.ndarray, sigma: np.ndarray
+    observed: np.ndarray,
+    prediction: np.ndarray,
+    sigma: np.ndarray,
+    shared_reference: bool = False,
 ) -> np.ndarray:
     cross = np.sum(np.conj(prediction) * observed / sigma[:, None] ** 2, axis=1)
+    if shared_reference:
+        cross = np.full(cross.shape, cross.sum())
     magnitude = np.abs(cross)
     return np.where(magnitude > 1e-15, cross / magnitude, 1.0 + 0.0j)
 
@@ -457,7 +467,9 @@ def vector_residual(
     params: np.ndarray, data: VectorData, handedness: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     prediction = vector_predict(params, data, handedness)
-    gauges = _optimal_phase_gauges(data.observed_nt, prediction, data.sigma_nt)
+    gauges = _optimal_phase_gauges(
+        data.observed_nt, prediction, data.sigma_nt, data.shared_reference
+    )
     residual = (data.observed_nt - gauges[:, None] * prediction) / data.sigma_nt[
         :, None
     ]
@@ -578,6 +590,7 @@ def fit_model(
     compiled = _compiled_pair(data, handedness)
     jacobian_arg: JacobianArg
     if compiled is None:
+
         def residual_fn(free_params: FloatArray, /) -> FloatArray:
             return vector_residual(expand(free_params), data, handedness)[0]
 
@@ -585,6 +598,7 @@ def fit_model(
     else:
         full_residual, full_jacobian = compiled
         if pinned:
+
             def residual_fn(free_params: FloatArray, /) -> FloatArray:
                 return full_residual(expand(free_params))
 
@@ -645,6 +659,7 @@ def fit_model(
         bool(solution.success),
         str(solution.message),
         len(pinned),
+        data.shared_reference,
     )
 
 

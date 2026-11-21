@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -50,6 +51,7 @@ class RawCapture:
 class RawCollection:
     name: str
     captures: tuple[RawCapture, ...]
+    reference_hz: float | None = None
 
     def __post_init__(self) -> None:
         captures = tuple(self.captures)
@@ -57,4 +59,8 @@ class RawCollection:
             raise ValueError("raw collection name cannot be empty")
         if not captures:
             raise ValueError("raw collection cannot be empty")
+        if self.reference_hz is not None and not (
+            math.isfinite(self.reference_hz) and self.reference_hz > 0.0
+        ):
+            raise ValueError("reference line frequency must be positive and finite")
         object.__setattr__(self, "captures", captures)

@@ -18,6 +18,11 @@ MAINS_SEARCH_HZ = 2.0
 MIN_BLOCK_SAMPLES = 256
 NOISE_PROBE_HZ = 5.0
 MIN_BLOCK_STDERR_NT = 0.5
+MIN_LINE_BLOCKS = 5
+MIN_LINE_SNR = 8.0
+MAX_LINE_SNR = 50.0
+LINE_SEARCH_HZ = 0.2
+LINE_SEARCH_STEP_HZ = 0.0005
 
 
 class _ScalarMinimum(Protocol):
@@ -290,3 +295,101 @@ def preprocess_block(
         drift_db=0.0,
         circularity=_circularity(phasor[None, :]),
     )
+
+
+def _reference_phasor(
+    time_s: NDArray[np.float64], axes_nt: NDArray[np.float64], frequency: float
+) -> tuple[NDArray[np.complex128], float]:
+    window = np.hanning(time_s.size)
+    weighted = (axes_nt - np.mean(axes_nt, axis=0)) * window[:, None]
+    window_sum = float(window.sum())
+    phasor = _windowed_phasor(time_s, weighted, window_sum, frequency)
+    noise = float(
+        np.linalg.norm(
+            _windowed_phasor(time_s, weighted, window_sum, frequency + NOISE_PROBE_HZ)
+        )
+    )
+    return phasor, noise
+
+
+def preprocess_reference_block(
+    recording: defs.RecordingInput, line_hz: float
+) -> LineSpectrum:
+    phasor, noise = _reference_phasor(recording.time_s, recording.field_nt, line_hz)
+    aligned = phasor * np.exp(-0.5j * np.angle(np.sum(phasor * phasor)))
+    quadrature_ratio = float(
+        np.linalg.norm(aligned.imag) / max(float(np.linalg.norm(aligned.real)), 1e-9)
+    )
+    return LineSpectrum(
+        line_hz=float(line_hz),
+        phasor_nt=phasor,
+        stderr_nt=max(noise, MIN_BLOCK_STDERR_NT),
+        quadrature_ratio=quadrature_ratio,
+        block_count=1,
+        drift_db=0.0,
+        circularity=_circularity(phasor[None, :]),
+    )
+
+
+def _polarisation_angles(
+    time_s: NDArray[np.float64],
+    field_nt: NDArray[np.float64],
+    block_size: int,
+    frequency: float,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+    times: list[float] = []
+    angles: list[float] = []
+    weights: list[float] = []
+    for index in range(time_s.size // block_size):
+        rows = slice(index * block_size, (index + 1) * block_size)
+        phasor, noise = _reference_phasor(time_s[rows], field_nt[rows], frequency)
+        snr = float(np.linalg.norm(phasor)) / max(noise, 1e-9)
+        if snr > MIN_LINE_SNR:
+            times.append(float(time_s[rows].mean()))
+            angles.append(float(np.angle(np.sum(phasor * phasor))))
+            weights.append(min(snr, MAX_LINE_SNR) ** 2)
+    return np.asarray(times), np.asarray(angles), np.asarray(weights)
+
+
+def estimate_line_hz(
+    time_s: NDArray[np.float64],
+    field_nt: NDArray[np.float64],
+    block_size: int,
+    config: PreprocessConfig | None = None,
+    iterations: int = 3,
+) -> float | None:
+    time_s = np.asarray(time_s, dtype=float)
+    field_nt = np.asarray(field_nt, dtype=float)
+    fs_hz = 1.0 / float(np.median(np.diff(time_s)))
+    span = min(time_s.size, max(MIN_BLOCK_SAMPLES, int(round(DEFAULT_SEGMENT_SECONDS * fs_hz))))
+    weighted = (field_nt[:span] - np.mean(field_nt[:span], axis=0)) * np.hanning(span)[:, None]
+    frequency = _mains_family(
+        np.fft.rfftfreq(span, 1.0 / fs_hz),
+        np.fft.rfft(weighted, axis=0),
+        config or PreprocessConfig(),
+    )
+    times, angles, weights = _polarisation_angles(time_s, field_nt, block_size, frequency)
+    if times.size < MIN_LINE_BLOCKS:
+        return None
+    offsets = np.arange(
+        -LINE_SEARCH_HZ, LINE_SEARCH_HZ + 0.5 * LINE_SEARCH_STEP_HZ, LINE_SEARCH_STEP_HZ
+    )
+    centred = times - times.mean()
+    coherence = np.abs(
+        np.exp(1j * (angles[None, :] - 4.0 * np.pi * offsets[:, None] * centred[None, :]))
+        @ weights
+    )
+    frequency += float(offsets[int(np.argmax(coherence))])
+    for _ in range(iterations):
+        times, angles, weights = _polarisation_angles(
+            time_s, field_nt, block_size, frequency
+        )
+        if times.size < MIN_LINE_BLOCKS:
+            return None
+        centred = times - times.mean()
+        unwrapped = np.unwrap(angles)
+        slope = np.sum(
+            weights * centred * (unwrapped - np.average(unwrapped, weights=weights))
+        ) / np.sum(weights * centred * centred)
+        frequency += float(slope) / (4.0 * np.pi)
+    return frequency

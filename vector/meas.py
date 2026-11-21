@@ -34,6 +34,7 @@ class Measurement:
 class Collection:
     name: str
     measurements: tuple[Measurement, ...]
+    shared_reference: bool = False
     _positions_m: NDArray[np.float64] | None = field(
         default=None, init=False, repr=False, compare=False
     )

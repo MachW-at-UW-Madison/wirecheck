@@ -20,6 +20,11 @@ def _log_wrote(path: Path) -> Path:
     return path
 
 
+CITATION = (
+    "If you use WireCheck, please cite: Xincheng Xie and Akarsh Prabhakara. "
+    "2026. Demo: Locating Leakage Current via Magnetometers. In MobiCom '26. "
+    "ACM. https://doi.org/10.1145/3795866.3848441"
+)
 DEFAULTS = vector.Config()
 FLOOR_DEFAULTS = vector.CalibrationConfig()
 
@@ -31,6 +36,8 @@ class CampaignArgs:
     sensor_rotation: tuple[float, ...]
     max_travel_mm: float
     max_along_mm: float
+    line_hz: float | None
+    per_block_phase: bool
     z1_height_mm: float
     core_mm: float
     pair_spacing_mm: float
@@ -52,6 +59,8 @@ class AnalyzeArgs(CampaignArgs):
             sensor_rotation=tuple(namespace.sensor_rotation),
             max_travel_mm=namespace.max_travel_mm,
             max_along_mm=namespace.max_along_mm,
+            line_hz=namespace.line_hz,
+            per_block_phase=namespace.per_block_phase,
             z1_height_mm=namespace.z1_height_mm,
             core_mm=namespace.core_mm,
             pair_spacing_mm=namespace.pair_spacing_mm,
@@ -79,6 +88,8 @@ class FloorArgs(CampaignArgs):
             sensor_rotation=tuple(namespace.sensor_rotation),
             max_travel_mm=namespace.max_travel_mm,
             max_along_mm=namespace.max_along_mm,
+            line_hz=namespace.line_hz,
+            per_block_phase=namespace.per_block_phase,
             z1_height_mm=namespace.z1_height_mm,
             core_mm=namespace.core_mm,
             pair_spacing_mm=namespace.pair_spacing_mm,
@@ -143,6 +154,16 @@ def _print_report(report: vector.Report) -> None:
     print(f"  selected: {report['selected_model']}; " f"N={report['total_positions']}")
 
 
+def _print_lockin(collection: vector.RawCollection) -> None:
+    if collection.reference_hz is None:
+        print(f"{collection.name}: lock-in phase per block")
+    else:
+        print(
+            f"{collection.name}: one lock-in phase for the campaign at "
+            f"{collection.reference_hz:.5f} Hz"
+        )
+
+
 def _write_figure(out_dir: Path, analysis: vector.Analysis, show: bool) -> None:
     import matplotlib.pyplot as plt
 
@@ -202,6 +223,20 @@ def _add_campaign_options(parser: argparse.ArgumentParser) -> None:
         default=file_adapter.DEFAULT_MAX_ALONG_M * 1000.0,
         help="discard a block when it is this far along the cable axis",
     )
+    phase = parser.add_mutually_exclusive_group()
+    phase.add_argument(
+        "--line-hz",
+        type=float,
+        default=None,
+        help="line frequency on the magnetometer clock; every block is "
+        "demodulated at it against absolute time and the campaign shares one "
+        "lock-in phase; default: meta.json, else estimated from the recording",
+    )
+    phase.add_argument(
+        "--per-block-phase",
+        action="store_true",
+        help="give every block its own tracked frequency and lock-in phase",
+    )
     parser.add_argument(
         "--z1-height-mm",
         type=float,
@@ -258,6 +293,8 @@ def _load(
                     ).reshape(3, 3),
                     max_travel_m=args.max_travel_mm / 1000.0,
                     max_along_m=args.max_along_mm / 1000.0,
+                    line_hz=args.line_hz,
+                    per_block_phase=args.per_block_phase,
                     progress=progress,
                 )
             )
@@ -269,6 +306,7 @@ def _load(
 
 def _run_analyze(args: AnalyzeArgs) -> None:
     collection = _load([args.data], args)[0]
+    _print_lockin(collection)
     analysis = vector.analyze(
         collection,
         vector.Config(
@@ -285,9 +323,12 @@ def _run_analyze(args: AnalyzeArgs) -> None:
     out_dir = out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "result.json"
-    path.write_text(
-        json.dumps(_json_safe(analysis.report), indent=2, allow_nan=False) + "\n"
-    )
+    payload = {
+        **analysis.report,
+        "line_hz": collection.reference_hz,
+        "citation": CITATION,
+    }
+    path.write_text(json.dumps(_json_safe(payload), indent=2, allow_nan=False) + "\n")
     _log_wrote(path)
     if not args.no_figure:
         _write_figure(out_dir, analysis, args.show)
@@ -333,7 +374,8 @@ def _run_calibrate_floor(args: FloorArgs) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Complex-vector WireCheck analysis and floor calibration "
-        "from iPad VIO campaigns"
+        "from iPad VIO campaigns",
+        epilog=CITATION,
     )
     commands = parser.add_subparsers(dest="command", required=True)
 

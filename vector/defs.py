@@ -102,3 +102,6 @@ class MeasurementCollectionInput(Protocol):
 
     @property
     def stderr_nt(self) -> NDArray[np.float64]: ...
+
+    @property
+    def shared_reference(self) -> bool: ...

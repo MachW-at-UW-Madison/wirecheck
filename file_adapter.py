@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from wirecheck import vector
+from wirecheck.vector import preproc
 
 ProgressCallback = Callable[[int, int, str], None]
 
@@ -22,6 +24,7 @@ DEFAULT_Z1_HEIGHT_MM = 10000.0
 NOISE_PROBE_HZ = 5.0
 DEFAULT_RAW_NAME = "raw.csv"
 DEFAULT_POSE_NAME = "pose.csv"
+META_NAME = "meta.json"
 RAW_COLUMNS = ("t_host", "t_mcu", "x", "y", "z")
 POSE_COLUMNS = ("t_host", "x", "y", "z", "qw", "qx", "qy", "qz")
 
@@ -159,6 +162,35 @@ def _analysis_frame(
     return across, up, np.cross(across, up)
 
 
+def _meta_line_hz(root: Path) -> float | None:
+    path = root / META_NAME
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text()).get("pi", {}).get("line_hz")
+    except (OSError, ValueError, AttributeError) as error:
+        raise ValueError(f"{path}: cannot read JSON ({error})") from error
+    return None if value is None else float(value)
+
+
+def reference_line_hz(
+    root: Path,
+    t_mcu: NDArray[np.float64],
+    field_nt: NDArray[np.float64],
+    block_size: int,
+    line_hz: float | None = None,
+    per_block_phase: bool = False,
+) -> float | None:
+    if per_block_phase:
+        return None
+    if line_hz is not None:
+        return float(line_hz)
+    stored = _meta_line_hz(root)
+    if stored is not None:
+        return stored
+    return preproc.estimate_line_hz(t_mcu, field_nt, block_size)
+
+
 def load_campaign(
     source: Path,
     *,
@@ -169,6 +201,8 @@ def load_campaign(
     max_along_m: float = DEFAULT_MAX_ALONG_M,
     raw_name: str = DEFAULT_RAW_NAME,
     pose_name: str = DEFAULT_POSE_NAME,
+    line_hz: float | None = None,
+    per_block_phase: bool = False,
     progress: ProgressCallback | None = None,
 ) -> vector.RawCollection:
     root = Path(source)
@@ -192,6 +226,9 @@ def load_campaign(
 
     fs_hz = 1.0 / float(np.median(np.diff(t_mcu)))
     block_size = max(256, int(round(block_seconds * fs_hz)))
+    reference_hz = reference_line_hz(
+        root, t_mcu, field_nt, block_size, line_hz, per_block_phase
+    )
     positions, quaternions = track.at(t_host)
     rotations = quaternion_to_matrix(quaternions)
     valid = np.asarray(
@@ -240,4 +277,4 @@ def load_campaign(
             f"{root}: no usable pose-tagged blocks; check the pose track and "
             "the travel/along-cable limits"
         )
-    return vector.RawCollection(root.name, tuple(captures))
+    return vector.RawCollection(root.name, tuple(captures), reference_hz)

@@ -4,6 +4,14 @@ English | [简体中文](README.zh-CN.md)
 
 Estimate cable position, load current, and leakage current from iPad VIO poses and three-axis magnetic recordings, with a fixed-threshold health verdict.
 
+> **If you use WireCheck, its code, its data or its four-point scan in your work, please cite our paper:**
+>
+> Xincheng Xie and Akarsh Prabhakara. 2026. Demo: Locating Leakage Current via Magnetometers. In *The 32nd Annual International Conference on Mobile Computing and Networking (MobiCom '26)*. ACM. https://doi.org/10.1145/3795866.3848441
+>
+> BibTeX is in [Citation](#citation) below, and GitHub's "Cite this repository" button reads [CITATION.cff](CITATION.cff).
+
+> **New in 0.2: the four-point scan.** Two mirror pairs of short holds, low on both sides of the cable, one pair near and one far, give the leak estimate in about 40 s. [FOUR-POINT.md](FOUR-POINT.md) explains why. To support it, every block is now demodulated at one fixed line frequency against absolute time, so the whole campaign shares a single lock-in phase.
+
 One campaign is one directory holding two CSVs:
 
 - `raw.csv`: the three-axis magnetic recording;
@@ -14,6 +22,8 @@ One campaign is one directory holding two CSVs:
 - the exact near field of a twin-conductor pair (live + neutral antiparallel line currents);
 - a monopole leakage term `C / r`, carried as Cartesian in-phase/quadrature components;
 - a uniform coherent background field `U` (one complex three-vector), treated as a nuisance.
+
+By default every block is demodulated at one fixed line frequency with the phase referenced to absolute magnetometer time, so all blocks share one lock-in phase and the fit profiles it once for the whole campaign (see [Lock-in phase](#lock-in-phase)).
 
 The fit yields the cable-centre position, the pair current, and the leakage magnitude and relative phase, from which the verdict follows: `no_cable`, `healthy`, `leakage_suspected`, or `leakage_detected`.
 
@@ -49,7 +59,7 @@ wirecheck --help
 ```bash
 python -m pip install build
 python -m build
-python -m pip install dist/magcomm_wirecheck-0.1.0-py3-none-any.whl
+python -m pip install dist/magcomm_wirecheck-0.2.0-py3-none-any.whl
 ```
 
 ## Data formats
@@ -105,7 +115,11 @@ t_host,x,y,z,qw,qx,qy,qz
 0.216667,0.000000,0.040000,0.100000,1,0,0,0
 ```
 
-### 3. Campaign directory
+### 3. `meta.json` (optional)
+
+If the campaign directory holds a `meta.json` with `{"pi": {"line_hz": F}}`, `F` is used as the lock-in line frequency (see below). No other field is read.
+
+### 4. Campaign directory
 
 `--data` must be a directory that contains both `raw.csv` and `pose.csv`. One directory is one collection.
 
@@ -128,6 +142,30 @@ Two gates discard blocks that would break the "one fixed position per measuremen
 - `--max-travel-mm` (default 50): discard a block when the camera moved more than this within it;
 - `--max-along-mm` (default 200): discard a block when it is this far along the cable axis, keeping the sweep within one cross-section.
 
+## Lock-in phase
+
+Each block's phasor is
+
+```text
+B_k = 2 / (sqrt(2) * sum(w)) * sum_n w_n (x(t_n) - mean_k x) exp(-i 2 pi f_L t_n)
+```
+
+with a Hann window `w` and `t_n` the absolute `t_mcu` time, so every block carries the same unknown phase `g`. The fit profiles that one phase for the whole campaign instead of one per block:
+
+```text
+g = C / |C|,   C = sum_k p_k* . B_k / sigma_k^2,   r_k = (B_k - g p_k) / sigma_k
+```
+
+where `p_k` is the model field at block `k`. The line frequency `f_L` (on the magnetometer clock) comes from, in order:
+
+| Source | When |
+| --- | --- |
+| `--line-hz F` | given on the command line |
+| `meta.json` `pi.line_hz` | stored by the recorder |
+| estimated from the recording | otherwise: the pair, leak and background fields are in phase, so `arg(sum_j B_kj^2)` advances as `4 pi df t`; its slope over the strong blocks gives `df` |
+
+If the estimate finds fewer than five strong blocks, or with `--per-block-phase`, every block gets its own tracked frequency and phase as in 0.1. The shared phase needs a line frequency that is constant over the scan on the magnetometer clock (a signal generator, or a stable supply). A 1 mHz error turns the phase by about 30 degrees over an 85 s scan, so use `--per-block-phase` for a supply that wanders, such as live mains.
+
 ## Usage
 
 The command line has two subcommands that share one campaign option group.
@@ -147,6 +185,8 @@ Common options:
 | `--sensor-rotation R00,...,R22` | identity | row-major 3×3 rotation from sensor axes to camera axes |
 | `--max-travel-mm` | 50 | discard a block when the camera moved more than this |
 | `--max-along-mm` | 200 | discard a block when it is this far along the cable axis |
+| `--line-hz` | see [Lock-in phase](#lock-in-phase) | line frequency for the one-phase lock-in |
+| `--per-block-phase` | off | one tracked frequency and phase per block instead of one phase per campaign |
 | `--z1-height-mm` | 10000 | physical lower bound for the fitted cable depth (negated to form the bound), in mm |
 | `--core-mm` | 0 | conductor radius in mm; 0 uses the unsmoothed exact twin-conductor field |
 | `--pair-spacing-mm` | 5.5 | live/neutral centre-to-centre spacing in mm; sets both the near-field shape and the current scale |
@@ -158,7 +198,7 @@ Common options:
 Output:
 
 - stdout: a text report;
-- `<data>/vector-lockin-output/result.json`: the full result;
+- `<data>/vector-lockin-output/result.json`: the full result, with the `line_hz` used (`null` for per-block phases);
 - `<data>/vector-lockin-output/figures/<collection>_summary.png`: the diagnostic figure (unless `--no-figure`).
 
 ### calibrate-floor: calibrate the fractional floor
@@ -223,7 +263,7 @@ print(analysis.report["estimated_leak_current_ma"])
 figure = analysis.make_figure()
 ```
 
-To rotate the sensor samples into the camera frame, pass a 3×3 matrix as `sensor_to_camera=` to `load_campaign`.
+To rotate the sensor samples into the camera frame, pass a 3×3 matrix as `sensor_to_camera=` to `load_campaign`. Pass `line_hz=F` to fix the lock-in frequency, or `per_block_phase=True` for one phase per block; `collection.reference_hz` is the frequency used (`None` for per-block phases).
 
 ## Repository layout
 
@@ -231,12 +271,15 @@ To rotate the sensor samples into the camera frame, pass a 3×3 matrix as `senso
 .
 ├── pyproject.toml
 ├── LICENSE                 # GPL-3.0-or-later
+├── CITATION.cff            # citation metadata
+├── FOUR-POINT.md           # why the four-point scan works
+├── docs/                   # figure for FOUR-POINT.md
 ├── wirecheck_cli.py        # command-line entry point
 ├── file_adapter.py         # raw.csv / pose.csv loading, clock and frame transforms
 └── vector/                 # format-independent analysis implementation
     ├── defs.py             # structural protocols
     ├── rdata.py            # raw recordings and capture contracts
-    ├── preproc.py          # lock-in spectra (multi-block average and single block)
+    ├── preproc.py          # lock-in spectra (multi-block average, single block, fixed reference), line frequency
     ├── meas.py             # normalized measurements and collections
     ├── core.py             # coefficient fitting and handedness selection
     ├── _vector_kernel.py   # optional numba residual/Jacobian kernels
@@ -252,6 +295,7 @@ To rotate the sensor samples into the camera frame, pass a 3×3 matrix as `senso
 - The iPad VIO provides camera poses; the sensor-to-camera rotation and lever arm must be calibrated (`--sensor-rotation`, `--lever-mm`), defaulting to identity and zero.
 - `raw.csv` and `pose.csv` share the `t_host` clock.
 - Each lock-in block is approximately static; blocks with more than `--max-travel-mm` of motion are discarded.
+- The one-phase lock-in assumes a line frequency that is constant over the scan on the magnetometer clock; otherwise use `--per-block-phase`.
 - Relative axis I/Q phase is preserved; axis delays are negligible.
 - The coherent background field is uniform and phase-stable.
 - `pair_spacing` sets both the near-field shape and the current scale and must match the real geometry.
@@ -259,11 +303,25 @@ To rotate the sensor samples into the camera frame, pass a 3×3 matrix as `senso
 
 ## Citation
 
-If this tool is useful in your research, please cite our demo paper:
+Please cite our demo paper in any publication, report or product that uses this software, its results, or the four-point scan:
 
-```text
-To be added.
+> Xincheng Xie and Akarsh Prabhakara. 2026. Demo: Locating Leakage Current via Magnetometers. In *The 32nd Annual International Conference on Mobile Computing and Networking (MobiCom '26), October 26–30, 2026, Austin, TX, USA.* ACM, New York, NY, USA. https://doi.org/10.1145/3795866.3848441
+
+```bibtex
+@inproceedings{xie2026wirecheck,
+  author    = {Xie, Xincheng and Prabhakara, Akarsh},
+  title     = {Demo: Locating Leakage Current via Magnetometers},
+  booktitle = {The 32nd Annual International Conference on Mobile Computing and Networking (MobiCom '26)},
+  year      = {2026},
+  month     = oct,
+  address   = {Austin, TX, USA},
+  publisher = {Association for Computing Machinery},
+  doi       = {10.1145/3795866.3848441},
+  isbn      = {979-8-4007-2505-0}
+}
 ```
+
+GitHub's "Cite this repository" button reads the same entry from [CITATION.cff](CITATION.cff).
 
 ## License
 

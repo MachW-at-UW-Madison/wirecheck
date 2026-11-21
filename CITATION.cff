@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the demo paper below."
+title: "WireCheck: complex-vector leakage-current analysis"
+type: software
+license: GPL-3.0-or-later
+version: 0.2.0
+repository-code: "https://github.com/MachW-at-UW-Madison/wirecheck"
+authors:
+  - family-names: Xie
+    given-names: Xincheng
+    affiliation: University of Wisconsin-Madison
+  - family-names: Prabhakara
+    given-names: Akarsh
+    affiliation: University of Wisconsin-Madison
+preferred-citation:
+  type: conference-paper
+  title: "Demo: Locating Leakage Current via Magnetometers"
+  authors:
+    - family-names: Xie
+      given-names: Xincheng
+      affiliation: University of Wisconsin-Madison
+    - family-names: Prabhakara
+      given-names: Akarsh
+      affiliation: University of Wisconsin-Madison
+  collection-title: "The 32nd Annual International Conference on Mobile Computing and Networking (MobiCom '26)"
+  conference:
+    name: "MobiCom '26"
+    city: Austin
+    region: TX
+    country: US
+    date-start: 2026-10-26
+    date-end: 2026-10-30
+  publisher:
+    name: Association for Computing Machinery
+  year: 2026
+  month: 10
+  doi: 10.1145/3795866.3848441
+  isbn: 979-8-4007-2505-0

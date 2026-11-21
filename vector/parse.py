@@ -298,8 +298,13 @@ def interpret(
 
     return {
         "method": (
-            "segmented complex three-axis vector lock-in + per-capture "
-            "phase gauges + fixed current thresholds"
+            "segmented complex three-axis vector lock-in + "
+            + (
+                "one phase gauge shared by every capture"
+                if selected.shared_reference
+                else "per-capture phase gauges"
+            )
+            + " + fixed current thresholds"
         ),
         "health": health,
         "quality": quality,

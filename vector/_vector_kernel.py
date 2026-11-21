@@ -43,7 +43,7 @@ else:
 
 
 @_jit
-def residual_full(
+def capture_terms(
     params: FloatArray,
     ig: np.int64,
     it: np.int64,
@@ -56,16 +56,17 @@ def residual_full(
     iui: IntArray,
     horizontal_m: FloatArray,
     vertical_m: FloatArray,
-    obs_re: FloatArray,
-    obs_im: FloatArray,
-    inv_sig: FloatArray,
     b0: FloatArray,
     b1: FloatArray,
     core2: float,
     half_spacing: float,
     inverse_spacing: float,
-    out: FloatArray,
-) -> FloatArray:
+    derivatives: bool,
+    pred_re: FloatArray,
+    pred_im: FloatArray,
+    d_re: FloatArray,
+    d_im: FloatArray,
+) -> None:
     gamma = params[ig]
     theta = params[it]
     amp = math.exp(params[ila])
@@ -77,131 +78,6 @@ def residual_full(
     oy = half_spacing * math.sin(theta)
     scale = amp * inverse_spacing
     n = horizontal_m.shape[0]
-    for i in range(n):
-        dx = horizontal_m[i] - params[ix0]
-        dy = vertical_m[i] - params[iy0]
-        r2 = dx * dx + dy * dy + core2
-        if r2 < MIN_RADIUS2:
-            r2 = MIN_RADIUS2
-        lx = dx - ox
-        ly = dy - oy
-        rx = dx + ox
-        ry = dy + oy
-        lr = lx * lx + ly * ly + core2
-        rr = rx * rx + ry * ry + core2
-        if lr < MIN_RADIUS2:
-            lr = MIN_RADIUS2
-        if rr < MIN_RADIUS2:
-            rr = MIN_RADIUS2
-        phi = math.atan2(dy, dx)
-        bx_re = scale * (ry / rr - ly / lr)
-        bx_im = 0.0
-        by_re = scale * (lx / lr - rx / rr)
-        by_im = 0.0
-        monopole = 1.0 / math.sqrt(r2)
-        mx = -monopole * math.sin(phi)
-        my = monopole * math.cos(phi)
-        bx_re += lp_re * mx
-        bx_im += lp_im * mx
-        by_re += lp_re * my
-        by_im += lp_im * my
-        px_re = cg * bx_re - sg * by_re
-        px_im = cg * bx_im - sg * by_im
-        py_re = sg * bx_re + cg * by_re
-        py_im = sg * bx_im + cg * by_im
-        p0r = px_re * b0[0] + py_re * b1[0]
-        p1r = px_re * b0[1] + py_re * b1[1]
-        p2r = px_re * b0[2] + py_re * b1[2]
-        p0i = px_im * b0[0] + py_im * b1[0]
-        p1i = px_im * b0[1] + py_im * b1[1]
-        p2i = px_im * b0[2] + py_im * b1[2]
-        p0r += params[iur[0]]
-        p1r += params[iur[1]]
-        p2r += params[iur[2]]
-        p0i += params[iui[0]]
-        p1i += params[iui[1]]
-        p2i += params[iui[2]]
-        cross_re = (
-            p0r * obs_re[i, 0]
-            + p0i * obs_im[i, 0]
-            + p1r * obs_re[i, 1]
-            + p1i * obs_im[i, 1]
-            + p2r * obs_re[i, 2]
-            + p2i * obs_im[i, 2]
-        )
-        cross_im = (
-            p0r * obs_im[i, 0]
-            - p0i * obs_re[i, 0]
-            + p1r * obs_im[i, 1]
-            - p1i * obs_re[i, 1]
-            + p2r * obs_im[i, 2]
-            - p2i * obs_re[i, 2]
-        )
-        magnitude = math.sqrt(cross_re * cross_re + cross_im * cross_im)
-        if magnitude > 1e-15:
-            g_re = cross_re / magnitude
-            g_im = cross_im / magnitude
-        else:
-            g_re = 1.0
-            g_im = 0.0
-        w = inv_sig[i]
-        real_row = i * 3
-        imag_row = 3 * n + i * 3
-        gr = g_re * p0r - g_im * p0i
-        gi = g_re * p0i + g_im * p0r
-        out[real_row] = (obs_re[i, 0] - gr) * w
-        out[imag_row] = (obs_im[i, 0] - gi) * w
-        gr = g_re * p1r - g_im * p1i
-        gi = g_re * p1i + g_im * p1r
-        out[real_row + 1] = (obs_re[i, 1] - gr) * w
-        out[imag_row + 1] = (obs_im[i, 1] - gi) * w
-        gr = g_re * p2r - g_im * p2i
-        gi = g_re * p2i + g_im * p2r
-        out[real_row + 2] = (obs_re[i, 2] - gr) * w
-        out[imag_row + 2] = (obs_im[i, 2] - gi) * w
-    return out
-
-
-@_jit
-def jacobian_full(
-    params: FloatArray,
-    ig: np.int64,
-    it: np.int64,
-    ila: np.int64,
-    ilc: np.int64,
-    ips: np.int64,
-    ix0: np.int64,
-    iy0: np.int64,
-    iur: IntArray,
-    iui: IntArray,
-    horizontal_m: FloatArray,
-    vertical_m: FloatArray,
-    obs_re: FloatArray,
-    obs_im: FloatArray,
-    inv_sig: FloatArray,
-    b0: FloatArray,
-    b1: FloatArray,
-    core2: float,
-    half_spacing: float,
-    inverse_spacing: float,
-    jac: FloatArray,
-) -> FloatArray:
-    gamma = params[ig]
-    theta = params[it]
-    amp = math.exp(params[ila])
-    lp_re = params[ilc]
-    lp_im = params[ips]
-    cg = math.cos(gamma)
-    sg = math.sin(gamma)
-    jac[:, :] = 0.0
-    n = horizontal_m.shape[0]
-    pred_re = np.empty(3, dtype=np.float64)
-    pred_im = np.empty(3, dtype=np.float64)
-    deriv_re = np.empty(3, dtype=np.float64)
-    deriv_im = np.empty(3, dtype=np.float64)
-    ox = half_spacing * math.cos(theta)
-    oy = half_spacing * math.sin(theta)
-    scale = amp * inverse_spacing
     for i in range(n):
         dx = horizontal_m[i] - params[ix0]
         dy = vertical_m[i] - params[iy0]
@@ -235,29 +111,11 @@ def jacobian_full(
         px_im = cg * bx_im - sg * by_im
         py_re = sg * bx_re + cg * by_re
         py_im = sg * bx_im + cg * by_im
-        cross_re = 0.0
-        cross_im = 0.0
         for axis in range(3):
-            pred_re[axis] = px_re * b0[axis] + py_re * b1[axis]
-            pred_im[axis] = px_im * b0[axis] + py_im * b1[axis]
-            pred_re[axis] += params[iur[axis]]
-            pred_im[axis] += params[iui[axis]]
-            cross_re += (
-                pred_re[axis] * obs_re[i, axis] + pred_im[axis] * obs_im[i, axis]
-            )
-            cross_im += (
-                pred_re[axis] * obs_im[i, axis] - pred_im[axis] * obs_re[i, axis]
-            )
-        magnitude = math.sqrt(cross_re * cross_re + cross_im * cross_im)
-        if magnitude > 1e-15:
-            g_re = cross_re / magnitude
-            g_im = cross_im / magnitude
-        else:
-            g_re = 1.0
-            g_im = 0.0
-        w = inv_sig[i]
-        real_row = i * 3
-        imag_row = 3 * n + i * 3
+            pred_re[i, axis] = px_re * b0[axis] + py_re * b1[axis] + params[iur[axis]]
+            pred_im[i, axis] = px_im * b0[axis] + py_im * b1[axis] + params[iui[axis]]
+        if not derivatives:
+            continue
         if rho2 > 0.0:
             dphi_x = dy / rho2
             dphi_y = -dx / rho2
@@ -328,71 +186,141 @@ def jacobian_full(
                 dpx_im = cg * dbx_im - sg * dby_im
                 dpy_re = sg * dbx_re + cg * dby_re
                 dpy_im = sg * dbx_im + cg * dby_im
-            cross_derivative_re = 0.0
-            cross_derivative_im = 0.0
             for axis in range(3):
-                deriv_re[axis] = dpx_re * b0[axis] + dpy_re * b1[axis]
-                deriv_im[axis] = dpx_im * b0[axis] + dpy_im * b1[axis]
-                cross_derivative_re += (
-                    deriv_re[axis] * obs_re[i, axis] + deriv_im[axis] * obs_im[i, axis]
-                )
-                cross_derivative_im += (
-                    deriv_re[axis] * obs_im[i, axis] - deriv_im[axis] * obs_re[i, axis]
-                )
-            phase_derivative = 0.0
-            if magnitude > 1e-15:
-                phase_derivative = (
-                    cross_re * cross_derivative_im - cross_im * cross_derivative_re
-                ) / (magnitude * magnitude)
-            for axis in range(3):
-                aligned_re = deriv_re[axis] - pred_im[axis] * phase_derivative
-                aligned_im = deriv_im[axis] + pred_re[axis] * phase_derivative
-                jac[real_row + axis, column] = (
-                    -(g_re * aligned_re - g_im * aligned_im) * w
-                )
-                jac[imag_row + axis, column] = (
-                    -(g_re * aligned_im + g_im * aligned_re) * w
-                )
+                d_re[i, column, axis] = dpx_re * b0[axis] + dpy_re * b1[axis]
+                d_im[i, column, axis] = dpx_im * b0[axis] + dpy_im * b1[axis]
         for component in range(3):
-            for quadrature in range(2):
-                cross_derivative_re = 0.0
-                cross_derivative_im = 0.0
-                for axis in range(3):
-                    deriv_re[axis] = 0.0
-                    deriv_im[axis] = 0.0
-                if quadrature == 0:
-                    column = iur[component]
-                    deriv_re[component] = 1.0
-                else:
-                    column = iui[component]
-                    deriv_im[component] = 1.0
-                for axis in range(3):
-                    cross_derivative_re += (
-                        deriv_re[axis] * obs_re[i, axis]
-                        + deriv_im[axis] * obs_im[i, axis]
-                    )
-                    cross_derivative_im += (
-                        deriv_re[axis] * obs_im[i, axis]
-                        - deriv_im[axis] * obs_re[i, axis]
-                    )
-                phase_derivative = 0.0
+            d_re[i, iur[component], component] = 1.0
+            d_im[i, iui[component], component] = 1.0
+
+
+@_jit
+def _cross(
+    re: FloatArray, im: FloatArray, obs_re: FloatArray, obs_im: FloatArray, i: int
+) -> tuple[float, float]:
+    cross_re = 0.0
+    cross_im = 0.0
+    for axis in range(3):
+        cross_re += re[axis] * obs_re[i, axis] + im[axis] * obs_im[i, axis]
+        cross_im += re[axis] * obs_im[i, axis] - im[axis] * obs_re[i, axis]
+    return cross_re, cross_im
+
+
+@_jit
+def residual_from_terms(
+    pred_re: FloatArray,
+    pred_im: FloatArray,
+    obs_re: FloatArray,
+    obs_im: FloatArray,
+    inv_sig: FloatArray,
+    shared: bool,
+    out: FloatArray,
+) -> FloatArray:
+    n = pred_re.shape[0]
+    g_re = 1.0
+    g_im = 0.0
+    if shared:
+        total_re = 0.0
+        total_im = 0.0
+        for i in range(n):
+            cross_re, cross_im = _cross(pred_re[i], pred_im[i], obs_re, obs_im, i)
+            w2 = inv_sig[i] * inv_sig[i]
+            total_re += w2 * cross_re
+            total_im += w2 * cross_im
+        magnitude = math.sqrt(total_re * total_re + total_im * total_im)
+        if magnitude > 1e-15:
+            g_re = total_re / magnitude
+            g_im = total_im / magnitude
+    for i in range(n):
+        if not shared:
+            cross_re, cross_im = _cross(pred_re[i], pred_im[i], obs_re, obs_im, i)
+            magnitude = math.sqrt(cross_re * cross_re + cross_im * cross_im)
+            if magnitude > 1e-15:
+                g_re = cross_re / magnitude
+                g_im = cross_im / magnitude
+            else:
+                g_re = 1.0
+                g_im = 0.0
+        w = inv_sig[i]
+        real_row = i * 3
+        imag_row = 3 * n + i * 3
+        for axis in range(3):
+            gr = g_re * pred_re[i, axis] - g_im * pred_im[i, axis]
+            gi = g_re * pred_im[i, axis] + g_im * pred_re[i, axis]
+            out[real_row + axis] = (obs_re[i, axis] - gr) * w
+            out[imag_row + axis] = (obs_im[i, axis] - gi) * w
+    return out
+
+
+@_jit
+def jacobian_from_terms(
+    pred_re: FloatArray,
+    pred_im: FloatArray,
+    d_re: FloatArray,
+    d_im: FloatArray,
+    obs_re: FloatArray,
+    obs_im: FloatArray,
+    inv_sig: FloatArray,
+    shared: bool,
+    jac: FloatArray,
+) -> FloatArray:
+    n = pred_re.shape[0]
+    columns = d_re.shape[1]
+    phase_derivative = np.zeros(columns, dtype=np.float64)
+    g_re = 1.0
+    g_im = 0.0
+    if shared:
+        total_re = 0.0
+        total_im = 0.0
+        d_total_re = np.zeros(columns, dtype=np.float64)
+        d_total_im = np.zeros(columns, dtype=np.float64)
+        for i in range(n):
+            w2 = inv_sig[i] * inv_sig[i]
+            cross_re, cross_im = _cross(pred_re[i], pred_im[i], obs_re, obs_im, i)
+            total_re += w2 * cross_re
+            total_im += w2 * cross_im
+            for column in range(columns):
+                dc_re, dc_im = _cross(d_re[i, column], d_im[i, column], obs_re, obs_im, i)
+                d_total_re[column] += w2 * dc_re
+                d_total_im[column] += w2 * dc_im
+        magnitude = math.sqrt(total_re * total_re + total_im * total_im)
+        if magnitude > 1e-15:
+            g_re = total_re / magnitude
+            g_im = total_im / magnitude
+            for column in range(columns):
+                phase_derivative[column] = (
+                    total_re * d_total_im[column] - total_im * d_total_re[column]
+                ) / (magnitude * magnitude)
+    for i in range(n):
+        if not shared:
+            cross_re, cross_im = _cross(pred_re[i], pred_im[i], obs_re, obs_im, i)
+            magnitude = math.sqrt(cross_re * cross_re + cross_im * cross_im)
+            if magnitude > 1e-15:
+                g_re = cross_re / magnitude
+                g_im = cross_im / magnitude
+            else:
+                g_re = 1.0
+                g_im = 0.0
+            for column in range(columns):
+                phase_derivative[column] = 0.0
                 if magnitude > 1e-15:
-                    phase_derivative = (
-                        cross_re * cross_derivative_im - cross_im * cross_derivative_re
+                    dc_re, dc_im = _cross(d_re[i, column], d_im[i, column], obs_re, obs_im, i)
+                    phase_derivative[column] = (
+                        cross_re * dc_im - cross_im * dc_re
                     ) / (magnitude * magnitude)
-                for axis in range(3):
-                    aligned_re = deriv_re[axis] - pred_im[axis] * phase_derivative
-                    aligned_im = deriv_im[axis] + pred_re[axis] * phase_derivative
-                    jac[real_row + axis, column] = (
-                        -(g_re * aligned_re - g_im * aligned_im) * w
-                    )
-                    jac[imag_row + axis, column] = (
-                        -(g_re * aligned_im + g_im * aligned_re) * w
-                    )
+        w = inv_sig[i]
+        real_row = i * 3
+        imag_row = 3 * n + i * 3
+        for column in range(columns):
+            for axis in range(3):
+                aligned_re = d_re[i, column, axis] - pred_im[i, axis] * phase_derivative[column]
+                aligned_im = d_im[i, column, axis] + pred_re[i, axis] * phase_derivative[column]
+                jac[real_row + axis, column] = -(g_re * aligned_re - g_im * aligned_im) * w
+                jac[imag_row + axis, column] = -(g_re * aligned_im + g_im * aligned_re) * w
     return jac
 
 
-class _KernelArgs(NamedTuple):
+class _Geometry(NamedTuple):
     gamma_index: np.int64
     theta_index: np.int64
     log_amplitude_index: np.int64
@@ -404,14 +332,18 @@ class _KernelArgs(NamedTuple):
     coherent_imag_indices: IntArray
     horizontal_m: FloatArray
     vertical_m: FloatArray
-    observed_real_nt: FloatArray
-    observed_imag_nt: FloatArray
-    inverse_sigma_nt: FloatArray
     basis_0: FloatArray
     basis_1: FloatArray
     core_squared_m2: float
     half_pair_spacing_m: float
     inverse_pair_spacing_m: float
+
+
+class _Observations(NamedTuple):
+    observed_real_nt: FloatArray
+    observed_imag_nt: FloatArray
+    inverse_sigma_nt: FloatArray
+    shared_reference: bool
 
 
 _PARAMETER_COUNT = 13
@@ -434,8 +366,9 @@ def _kernel_args(
     sigma_nt: FloatArray,
     core_m: float,
     pair_spacing_m: float,
-) -> _KernelArgs:
-    return _KernelArgs(
+    shared_reference: bool,
+) -> tuple[_Geometry, _Observations]:
+    geometry = _Geometry(
         _GAMMA,
         _THETA,
         _LOG_AMPLITUDE,
@@ -447,15 +380,19 @@ def _kernel_args(
         _COHERENT_IMAG,
         np.ascontiguousarray(horizontal_m, dtype=np.float64),
         np.ascontiguousarray(vertical_m, dtype=np.float64),
-        np.ascontiguousarray(observed_nt.real, dtype=np.float64),
-        np.ascontiguousarray(observed_nt.imag, dtype=np.float64),
-        np.ascontiguousarray(1.0 / sigma_nt, dtype=np.float64),
         np.ascontiguousarray(basis[:, 0], dtype=np.float64),
         np.ascontiguousarray(basis[:, 1], dtype=np.float64),
         float(core_m) ** 2,
         0.5 * float(pair_spacing_m),
         1.0 / float(pair_spacing_m),
     )
+    observations = _Observations(
+        np.ascontiguousarray(observed_nt.real, dtype=np.float64),
+        np.ascontiguousarray(observed_nt.imag, dtype=np.float64),
+        np.ascontiguousarray(1.0 / sigma_nt, dtype=np.float64),
+        bool(shared_reference),
+    )
+    return geometry, observations
 
 
 def compiled(
@@ -467,21 +404,48 @@ def compiled(
     sigma_nt: FloatArray,
     core_m: float,
     pair_spacing_m: float,
+    shared_reference: bool = False,
 ) -> CompiledFunctions | None:
     if not HAVE_NUMBA:
         return None
-    args = _kernel_args(
-        basis, horizontal_m, vertical_m, observed_nt, sigma_nt, core_m, pair_spacing_m
+    geometry, observations = _kernel_args(
+        basis,
+        horizontal_m,
+        vertical_m,
+        observed_nt,
+        sigma_nt,
+        core_m,
+        pair_spacing_m,
+        shared_reference,
     )
-    rows = 6 * horizontal_m.size
+    n = horizontal_m.size
+    rows = 6 * n
     columns = _PARAMETER_COUNT
+    no_derivatives = np.zeros((0, 0, 3), dtype=np.float64)
 
     def residual(parameters: FloatArray) -> FloatArray:
-        return residual_full(parameters, *args, np.empty(rows, dtype=np.float64))
+        pred_re = np.empty((n, 3), dtype=np.float64)
+        pred_im = np.empty((n, 3), dtype=np.float64)
+        capture_terms(
+            parameters, *geometry, False, pred_re, pred_im, no_derivatives, no_derivatives
+        )
+        return residual_from_terms(
+            pred_re, pred_im, *observations, np.empty(rows, dtype=np.float64)
+        )
 
     def jacobian(parameters: FloatArray) -> FloatArray:
-        return jacobian_full(
-            parameters, *args, np.empty((rows, columns), dtype=np.float64)
+        pred_re = np.empty((n, 3), dtype=np.float64)
+        pred_im = np.empty((n, 3), dtype=np.float64)
+        d_re = np.zeros((n, columns, 3), dtype=np.float64)
+        d_im = np.zeros((n, columns, 3), dtype=np.float64)
+        capture_terms(parameters, *geometry, True, pred_re, pred_im, d_re, d_im)
+        return jacobian_from_terms(
+            pred_re,
+            pred_im,
+            d_re,
+            d_im,
+            *observations,
+            np.empty((rows, columns), dtype=np.float64),
         )
 
     return residual, jacobian

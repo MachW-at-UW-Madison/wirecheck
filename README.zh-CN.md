@@ -4,6 +4,14 @@
 
 从 iPad VIO 位姿与三轴磁场录音出发，估计电缆位置、负载电流与漏电流，并给出基于固定阈值的健康判定。
 
+> **如果你在工作中使用了 WireCheck、其代码、其数据或四点扫描，请引用我们的论文：**
+>
+> Xincheng Xie and Akarsh Prabhakara. 2026. Demo: Locating Leakage Current via Magnetometers. In *The 32nd Annual International Conference on Mobile Computing and Networking (MobiCom '26)*. ACM. https://doi.org/10.1145/3795866.3848441
+>
+> BibTeX 见下文[引用](#引用)一节；GitHub 的 “Cite this repository” 按钮读取 [CITATION.cff](CITATION.cff)。
+
+> **0.2 新增：四点扫描。** 在电缆两侧低处各取一近一远两个点，组成两对镜像点，每点短暂停留，约 40 秒即可得到漏电估计。原理见 [FOUR-POINT.zh-CN.md](FOUR-POINT.zh-CN.md)。为此，现在每个块都以同一个固定工频、按绝对时间解调，整次采集共用一个锁相相位。
+
 一次采集（campaign）对应一个目录，目录里有两个 CSV：
 
 - `raw.csv`：三轴磁场录音；
@@ -14,6 +22,8 @@
 - 双导线对（火线 + 零线，反平行线电流）产生的精确近场；
 - 单极漏电流项 `C / r`（以同相/正交的笛卡尔复分量表示）；
 - 均匀的相干背景场 `U`（一个复三维矢量，作为干扰项）。
+
+默认情况下，每个块都以同一个固定工频解调，相位以磁力计的绝对时间为参考，所以所有块共用一个锁相相位，拟合对整次采集只求一次相位（见[锁相相位](#锁相相位)）。
 
 拟合输出电缆中心位置、对偶电流、漏电流幅值与相对相位，并据此给出判定：`no_cable`、`healthy`、`leakage_suspected` 或 `leakage_detected`。
 
@@ -49,7 +59,7 @@ wirecheck --help
 ```bash
 python -m pip install build
 python -m build
-python -m pip install dist/magcomm_wirecheck-0.1.0-py3-none-any.whl
+python -m pip install dist/magcomm_wirecheck-0.2.0-py3-none-any.whl
 ```
 
 ## 数据格式
@@ -105,7 +115,11 @@ t_host,x,y,z,qw,qx,qy,qz
 0.216667,0.000000,0.040000,0.100000,1,0,0,0
 ```
 
-### 3. 采集目录
+### 3. `meta.json`（可选）
+
+如果采集目录里有 `meta.json` 且其中有 `{"pi": {"line_hz": F}}`，`F` 就作为锁相工频（见下文）。不读取其他字段。
+
+### 4. 采集目录
 
 `--data` 必须是一个目录，目录里必须同时存在 `raw.csv` 与 `pose.csv`。一个目录就是一个 collection。
 
@@ -128,6 +142,30 @@ t_host,x,y,z,qw,qx,qy,qz
 - `--max-travel-mm`（默认 50）：块内相机移动超过该值则丢弃；
 - `--max-along-mm`（默认 200）：该块沿电缆方向的偏移超过该值则丢弃，使扫描保持在一个横截面内。
 
+## 锁相相位
+
+每个块的相量为
+
+```text
+B_k = 2 / (sqrt(2) * sum(w)) * sum_n w_n (x(t_n) - mean_k x) exp(-i 2 pi f_L t_n)
+```
+
+其中 `w` 为 Hann 窗，`t_n` 为绝对的 `t_mcu` 时间，因此每个块带有同一个未知相位 `g`。拟合对整次采集只求这一个相位，而不是每块一个：
+
+```text
+g = C / |C|,   C = sum_k p_k* . B_k / sigma_k^2,   r_k = (B_k - g p_k) / sigma_k
+```
+
+其中 `p_k` 是块 `k` 处的模型磁场。工频 `f_L`（磁力计时钟下）按以下顺序取得：
+
+| 来源 | 何时使用 |
+| --- | --- |
+| `--line-hz F` | 命令行给出 |
+| `meta.json` 的 `pi.line_hz` | 采集程序记录了该值 |
+| 从录音估计 | 其余情况：对偶项、漏电项与背景场同相，所以 `arg(sum_j B_kj^2)` 以 `4 pi df t` 前进，其在强信号块上的斜率给出 `df` |
+
+如果估计时强信号块少于五个，或者给了 `--per-block-phase`，则像 0.1 一样每块各自追踪频率与相位。共用一个相位要求一次扫描内磁力计时钟下的工频恒定（信号发生器或稳定电源）。1 mHz 的误差在 85 秒的扫描中会使相位转约 30 度，所以对频率漂移的电源（例如真实市电）请使用 `--per-block-phase`。
+
 ## 运行
 
 命令行提供两个子命令，二者共享同一组 campaign 参数。
@@ -147,6 +185,8 @@ wirecheck analyze --data path/to/campaign
 | `--sensor-rotation R00,...,R22` | 单位矩阵 | 传感器坐标轴到相机坐标轴的 3×3 旋转（行优先，逗号分隔） |
 | `--max-travel-mm` | 50 | 块内相机位移超过该值则丢弃 |
 | `--max-along-mm` | 200 | 沿电缆方向偏移超过该值则丢弃 |
+| `--line-hz` | 见[锁相相位](#锁相相位) | 共用相位锁相所用的工频 |
+| `--per-block-phase` | 关闭 | 每块各自追踪频率与相位，而不是整次一个相位 |
 | `--z1-height-mm` | 10000 | 拟合电缆深度的物理下界（取负值作为下界，单位 mm） |
 | `--core-mm` | 0 | 导体半径，单位 mm；0 表示使用未平滑的精确双导线场 |
 | `--pair-spacing-mm` | 5.5 | 火线/零线中心间距，单位 mm；同时决定近场形状与电流换算 |
@@ -158,7 +198,7 @@ wirecheck analyze --data path/to/campaign
 输出：
 
 - 标准输出：文本报告；
-- `<data>/vector-lockin-output/result.json`：完整结果；
+- `<data>/vector-lockin-output/result.json`：完整结果，含所用的 `line_hz`（每块各自相位时为 `null`）；
 - `<data>/vector-lockin-output/figures/<collection>_summary.png`：诊断图（除非指定 `--no-figure`）。
 
 ### calibrate-floor：标定 fractional floor
@@ -223,7 +263,7 @@ print(analysis.report["estimated_leak_current_ma"])
 figure = analysis.make_figure()
 ```
 
-需要把传感器样本旋转到相机坐标系时，给 `load_campaign` 传入 `sensor_to_camera=` 一个 3×3 矩阵。
+需要把传感器样本旋转到相机坐标系时，给 `load_campaign` 传入 `sensor_to_camera=` 一个 3×3 矩阵。传入 `line_hz=F` 可固定锁相工频，传入 `per_block_phase=True` 则每块一个相位；`collection.reference_hz` 为实际使用的工频（每块各自相位时为 `None`）。
 
 ## 目录结构
 
@@ -231,12 +271,15 @@ figure = analysis.make_figure()
 .
 ├── pyproject.toml
 ├── LICENSE                 # GPL-3.0-or-later
+├── CITATION.cff            # 引用元数据
+├── FOUR-POINT.md           # 四点扫描为何有效
+├── docs/                   # FOUR-POINT.md 的图
 ├── wirecheck_cli.py        # 命令行入口
 ├── file_adapter.py         # raw.csv / pose.csv 读取、时钟与坐标变换
 └── vector/                 # 与采集格式无关的分析实现
     ├── defs.py             # 结构化协议
     ├── rdata.py            # 原始记录与采集契约
-    ├── preproc.py          # 锁相频谱提取（多块平均与单块两种入口）
+    ├── preproc.py          # 锁相频谱提取（多块平均、单块、固定参考三种入口）与工频估计
     ├── meas.py             # 归一化测量与集合
     ├── core.py             # 系数拟合与手性选择
     ├── _vector_kernel.py   # 可选的 numba 残差/雅可比内核
@@ -252,6 +295,7 @@ figure = analysis.make_figure()
 - iPad VIO 提供相机位姿；传感器相对相机的旋转与杆臂需要标定（`--sensor-rotation`、`--lever-mm`），默认是单位旋转与零杆臂。
 - `raw.csv` 与 `pose.csv` 使用同一时钟 `t_host`。
 - 每个锁相块内近似静止；位移超过 `--max-travel-mm` 的块会被丢弃。
+- 共用相位的锁相假设一次扫描内磁力计时钟下的工频恒定；否则请使用 `--per-block-phase`。
 - 保留各轴之间的 I/Q 相位关系；忽略轴间延迟。
 - 相干背景场均匀且相位稳定。
 - `pair_spacing` 同时决定近场形状与电流换算，必须与实际几何匹配。
@@ -259,11 +303,25 @@ figure = analysis.make_figure()
 
 ## 引用
 
-如果本工具对你的研究有帮助，请引用我们的 demo 论文：
+任何使用本软件、其结果或四点扫描的论文、报告或产品，请引用我们的 demo 论文：
 
-```text
-待补充。
+> Xincheng Xie and Akarsh Prabhakara. 2026. Demo: Locating Leakage Current via Magnetometers. In *The 32nd Annual International Conference on Mobile Computing and Networking (MobiCom '26), October 26–30, 2026, Austin, TX, USA.* ACM, New York, NY, USA. https://doi.org/10.1145/3795866.3848441
+
+```bibtex
+@inproceedings{xie2026wirecheck,
+  author    = {Xie, Xincheng and Prabhakara, Akarsh},
+  title     = {Demo: Locating Leakage Current via Magnetometers},
+  booktitle = {The 32nd Annual International Conference on Mobile Computing and Networking (MobiCom '26)},
+  year      = {2026},
+  month     = oct,
+  address   = {Austin, TX, USA},
+  publisher = {Association for Computing Machinery},
+  doi       = {10.1145/3795866.3848441},
+  isbn      = {979-8-4007-2505-0}
+}
 ```
+
+GitHub 的 “Cite this repository” 按钮从 [CITATION.cff](CITATION.cff) 读取同一条目。
 
 ## 许可证
 
